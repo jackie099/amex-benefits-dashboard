@@ -1,0 +1,11 @@
+# Personal data - NEVER commit
+tools/plat.txt
+tools/bizplat.txt
+
+# Build artifacts
+firebase-debug.log
+.DS_Store
+
+# IDE / tools
+.claude/
+.superpowers/
