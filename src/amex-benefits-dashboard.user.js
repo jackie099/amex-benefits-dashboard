@@ -1,7 +1,8 @@
 // ==UserScript==
 // @name         Amex Benefits Dashboard
 // @namespace    https://github.com/amex-benefits-dashboard
-// @version      0.2.0
+// @version      1.0.0
+// @author       jackie099
 // @description  Unified benefits credit tracker across all Amex cards
 // @match        https://global.americanexpress.com/*
 // @match        https://www.americanexpress.com/*
@@ -139,10 +140,34 @@
 
   const DURATION_LABELS = {
     'Monthly': 'Monthly',
+    'QuarterYear': 'Quarterly',
     'HalfYear': 'Semi-Annual',
     'CalenderYear': 'Annual',       // Amex typo preserved
     'CalendarYear': 'Annual',       // in case they fix it
   };
+
+  /**
+   * Calculate period length in months from start/end dates, and derive
+   * the actual duration label and annual multiplier. Amex sometimes mislabels
+   * durations (e.g., Hilton quarterly credit labeled as CalenderYear).
+   */
+  function detectPeriod(trackerDuration, startDate, endDate) {
+    if (startDate && endDate) {
+      // Parse as UTC to avoid timezone issues (Amex dates are date-only strings)
+      const sp = String(startDate).slice(0, 10).split('-').map(Number);
+      const ep = String(endDate).slice(0, 10).split('-').map(Number);
+      const months = (ep[0] - sp[0]) * 12 + (ep[1] - sp[1]) + 1;
+      if (months <= 1) return { duration: 'Monthly', label: 'Monthly', multiplier: 12 };
+      if (months <= 3) return { duration: 'QuarterYear', label: 'Quarterly', multiplier: 4 };
+      if (months <= 6) return { duration: 'HalfYear', label: 'Semi-Annual', multiplier: 2 };
+      return { duration: trackerDuration, label: DURATION_LABELS[trackerDuration] || 'Annual', multiplier: 1 };
+    }
+    // Fallback to label-based
+    if (trackerDuration === 'Monthly') return { duration: 'Monthly', label: 'Monthly', multiplier: 12 };
+    if (trackerDuration === 'QuarterYear') return { duration: 'QuarterYear', label: 'Quarterly', multiplier: 4 };
+    if (trackerDuration === 'HalfYear') return { duration: 'HalfYear', label: 'Semi-Annual', multiplier: 2 };
+    return { duration: trackerDuration, label: DURATION_LABELS[trackerDuration] || trackerDuration, multiplier: 1 };
+  }
 
   // Module-level state guard to prevent duplicate dashboard renders
   let dashboardActive = false;
@@ -524,21 +549,20 @@
         if (t.category !== 'usage') continue;
 
         const key = t.benefitId;
-        const periodMultiplier = t.trackerDuration === 'Monthly' ? 12
-          : (t.trackerDuration === 'HalfYear' ? 2 : 1);
+        const period = detectPeriod(t.trackerDuration, t.periodStartDate, t.periodEndDate);
 
         if (!grouped.has(key)) {
           grouped.set(key, {
             benefitId: t.benefitId,
             benefitName: t.benefitName,
-            trackerDuration: t.trackerDuration,
-            durationLabel: DURATION_LABELS[t.trackerDuration] || t.trackerDuration,
+            trackerDuration: period.duration,
+            durationLabel: period.label,
             periodStartDate: t.periodStartDate,
             periodEndDate: t.periodEndDate,
             daysRemaining: daysUntil(t.periodEndDate),
             currencySymbol: t.tracker ? t.tracker.targetCurrencySymbol || '$' : '$',
             targetUnit: t.tracker ? t.tracker.targetUnit || 'MONETARY' : 'MONETARY',
-            periodMultiplier: periodMultiplier,
+            periodMultiplier: period.multiplier,
             // Current period totals
             totalTarget: 0,
             totalSpent: 0,
@@ -555,22 +579,26 @@
         const target = parseFloat(t.tracker?.targetAmount || '0');
         const spent = parseFloat(t.tracker?.spentAmount || '0');
         const remaining = parseFloat(t.tracker?.remainingAmount || '0');
+        // YTD: use totalSavingsYearToDate when present (even "0.00" is valid)
+        let ytd = null;
         const rawYtd = t.progress?.totalSavingsYearToDate;
-        const hasYtd = rawYtd !== undefined && rawYtd !== null;
-        const ytd = hasYtd ? parseFloat(rawYtd) : null;
+        if (rawYtd !== undefined && rawYtd !== null) {
+          ytd = parseFloat(rawYtd);
+          if (isNaN(ytd)) ytd = null;
+        }
 
         // Self-track: save current period data for YTD calculation
         const periodKey = (t.periodStartDate || '') + '_' + (t.periodEndDate || '');
         selfTrackPeriod(t.benefitId, result.accountToken, periodKey, spent);
 
-        // Calculate YTD: API field > self-tracked > current period only
+        // Fallback chain: API YTD > message YTD > self-tracked > current period
         const selfTrackedYtd = getSelfTrackedYtd(t.benefitId, result.accountToken);
         const effectiveYtd = ytd !== null ? ytd : (selfTrackedYtd !== null ? selfTrackedYtd : spent);
 
         group.totalTarget += target;
         group.totalSpent += spent;
         group.totalRemaining += remaining;
-        group.annualTarget += target * periodMultiplier;
+        group.annualTarget += target * period.multiplier;
         group.annualYtd += effectiveYtd;
         if (ytd === null && selfTrackedYtd === null) group.hasIncompleteYtd = true;
 
@@ -583,7 +611,7 @@
           target: target,
           spent: spent,
           remaining: remaining,
-          annualTarget: target * periodMultiplier,
+          annualTarget: target * period.multiplier,
           ytd: effectiveYtd,
           progressTitle: t.progress?.title || t.benefitName,
         });
@@ -1234,6 +1262,7 @@
     const filterOptions = [
       { key: 'all', label: 'All' },
       { key: 'Monthly', label: 'Monthly' },
+      { key: 'QuarterYear', label: 'Quarterly' },
       { key: 'HalfYear', label: 'Semi-Annual' },
       { key: 'CalenderYear', label: 'Annual' },
     ];
@@ -1320,7 +1349,7 @@
 
     // Group benefits by duration
     const byDuration = new Map();
-    const durationOrder = ['Monthly', 'HalfYear', 'CalenderYear', 'CalendarYear'];
+    const durationOrder = ['Monthly', 'QuarterYear', 'HalfYear', 'CalenderYear', 'CalendarYear'];
 
     for (const [, benefit] of grouped) {
       const dur = benefit.trackerDuration || 'Other';
@@ -1403,6 +1432,7 @@
 
     // Period label for the progress text
     const periodWord = benefit.durationLabel === 'Monthly' ? 'this month'
+      : benefit.durationLabel === 'Quarterly' ? 'this quarter'
       : benefit.durationLabel === 'Semi-Annual' ? 'this half'
       : 'this year';
 
