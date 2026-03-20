@@ -24,10 +24,25 @@
   let interceptedCardDetails = [];
   let interceptedTokens = [];
 
-  const originalFetch = window.fetch;
+  // Safely capture original fetch — may not exist at document-start on all browsers
+  var originalFetch = window.fetch;
+  if (!originalFetch) {
+    // Wait for fetch to become available, then patch
+    Object.defineProperty(window, 'fetch', {
+      configurable: true,
+      set: function(val) {
+        originalFetch = val;
+        delete window.fetch;
+        installFetchInterceptor();
+      }
+    });
+  } else {
+    installFetchInterceptor();
+  }
+
   // Use original fetch for our own API calls (bypass our interceptor)
   function pageFetch() {
-    return originalFetch.apply(window, arguments);
+    return (originalFetch || window.fetch).apply(window, arguments);
   }
   function saveTokens(newTokens) {
     var seen = {};
@@ -66,47 +81,53 @@
     return tokens;
   }
 
-  window.fetch = function() {
-    var url = typeof arguments[0] === 'string' ? arguments[0] : (arguments[0] && arguments[0].url) || '';
-    var opts = arguments[1] || {};
-    var isAmexApi = url.indexOf('americanexpress.com') !== -1;
-
-    if (!isAmexApi) {
-      return originalFetch.apply(this, arguments);
-    }
-
-    // Capture accountTokens from request body
-    if (opts.body) {
+  function installFetchInterceptor() {
+    if (!originalFetch) return;
+    window.fetch = function() {
       try {
-        var bodyStr = typeof opts.body === 'string' ? opts.body : '';
-        if (bodyStr.indexOf('accountToken') !== -1 || bodyStr.indexOf('Token') !== -1) {
-          saveTokens(extractTokensFromJson(bodyStr));
-        }
-      } catch(e) {}
-    }
+        var url = typeof arguments[0] === 'string' ? arguments[0] : (arguments[0] && arguments[0].url) || '';
+        var opts = arguments[1] || {};
+        var isAmexApi = url.indexOf('americanexpress.com') !== -1;
 
-    // Intercept ALL Amex API responses to capture tokens + card details
-    return originalFetch.apply(this, arguments).then(function(response) {
-      var clone = response.clone();
-      clone.text().then(function(text) {
-        try {
-          // Capture tokens from any response containing accountToken
-          if (text.indexOf('accountToken') !== -1) {
-            saveTokens(extractTokensFromJson(text));
-          }
-          // Capture card details from ReadLoyaltyBenefitsCardProduct
-          if (url.indexOf('ReadLoyaltyBenefitsCardProduct') !== -1) {
-            var data = JSON.parse(text);
-            if (data && data.cardDetails && data.cardDetails.length > 0) {
-              interceptedCardDetails = data.cardDetails;
-              try { localStorage.setItem(STORAGE_KEY_CARDS, JSON.stringify(data.cardDetails)); } catch(e) {}
+        if (!isAmexApi) {
+          return originalFetch.apply(this, arguments);
+        }
+
+        // Capture accountTokens from request body
+        if (opts.body) {
+          try {
+            var bodyStr = typeof opts.body === 'string' ? opts.body : '';
+            if (bodyStr.indexOf('accountToken') !== -1 || bodyStr.indexOf('Token') !== -1) {
+              saveTokens(extractTokensFromJson(bodyStr));
             }
-          }
-        } catch(e) {}
-      }).catch(function(){});
-      return response;
-    });
-  };
+          } catch(e) {}
+        }
+
+        // Intercept ALL Amex API responses to capture tokens + card details
+        return originalFetch.apply(this, arguments).then(function(response) {
+          var clone = response.clone();
+          clone.text().then(function(text) {
+            try {
+              if (text.indexOf('accountToken') !== -1) {
+                saveTokens(extractTokensFromJson(text));
+              }
+              if (url.indexOf('ReadLoyaltyBenefitsCardProduct') !== -1) {
+                var data = JSON.parse(text);
+                if (data && data.cardDetails && data.cardDetails.length > 0) {
+                  interceptedCardDetails = data.cardDetails;
+                  try { localStorage.setItem(STORAGE_KEY_CARDS, JSON.stringify(data.cardDetails)); } catch(e) {}
+                }
+              }
+            } catch(e) {}
+          }).catch(function(){});
+          return response;
+        });
+      } catch(e) {
+        // Never break the page — fall through to original fetch
+        return originalFetch.apply(this, arguments);
+      }
+    };
+  }
 
   // ============================================================
   // Configuration
@@ -1519,6 +1540,7 @@
    */
   function injectNavLink() {
     if (document.getElementById('amex-dash-nav-link')) return;
+    if (!document.body) return; // body not ready yet — MutationObserver will retry
 
     // Use a fixed floating button — reliable regardless of Amex's nav DOM structure
     const btn = document.createElement('button');
@@ -1742,15 +1764,32 @@
    * Entry point: initialize the userscript.
    */
   function init() {
-    console.log('[AmexDash] Initializing...');
-    injectStyles();
-    injectNavLink();
-    setupRouting();
-    watchHeader();
-    console.log('[AmexDash] Ready');
+    try {
+      console.log('[AmexDash] Initializing...');
+      injectStyles();
+      injectNavLink();
+      setupRouting();
+      watchHeader();
+
+      // Retry button injection if body wasn't ready
+      if (!document.getElementById('amex-dash-nav-link')) {
+        var retryCount = 0;
+        var retryInterval = setInterval(function() {
+          retryCount++;
+          injectNavLink();
+          if (document.getElementById('amex-dash-nav-link') || retryCount > 20) {
+            clearInterval(retryInterval);
+          }
+        }, 500);
+      }
+
+      console.log('[AmexDash] Ready');
+    } catch(e) {
+      console.error('[AmexDash] Init failed:', e);
+    }
   }
 
-  // Kick off
+  // Kick off — handle all possible document states
   if (document.readyState === 'complete' || document.readyState === 'interactive') {
     init();
   } else {
