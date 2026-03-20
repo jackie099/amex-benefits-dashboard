@@ -1648,11 +1648,26 @@
       if (gen !== dashboardGeneration) return;
 
       if (err instanceof SessionExpiredError) {
+        // Clear stale cached data so next attempt uses fresh tokens
+        try {
+          localStorage.removeItem(STORAGE_KEY_CARDS);
+          localStorage.removeItem(STORAGE_KEY_TOKENS);
+        } catch(e) {}
+        interceptedCardDetails = [];
+        interceptedTokens = [];
+        dashboardActive = false;
+
         dashBody.innerHTML = '';
         const errEl = document.createElement('div');
         errEl.className = 'amex-dash-error';
-        errEl.innerHTML = '<h3>Session Expired</h3><p>Please <a href="https://global.americanexpress.com/login" style="color:#006fcf">log in again</a> to view your benefits.</p>';
+        errEl.innerHTML = '<h3>Session Changed</h3>' +
+          '<p>Your session context changed (account switch or expiration).</p>' +
+          '<p style="margin-top:8px;">Navigate to any <a href="/card-benefits/view-all/platinum" style="color:#006fcf">benefits page</a> to refresh card data, then try again.</p>' +
+          '<p style="margin-top:12px;"><button id="amex-dash-retry" style="background:#006fcf;color:#fff;border:none;padding:8px 20px;border-radius:4px;cursor:pointer;font-size:14px;">Retry Now</button></p>';
         dashBody.appendChild(errEl);
+        document.getElementById('amex-dash-retry').addEventListener('click', function() {
+          showDashboard(true);
+        });
       } else {
         renderError(dashBody, 'Failed to load benefits', err.message);
       }
