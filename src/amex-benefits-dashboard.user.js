@@ -57,6 +57,7 @@
       }
     }
     if (added) {
+      console.log('[AmexDash] Captured ' + interceptedTokens.length + ' account tokens');
       try { localStorage.setItem(STORAGE_KEY_TOKENS, JSON.stringify(interceptedTokens)); } catch(e) {}
     }
   }
@@ -82,7 +83,11 @@
   }
 
   function installFetchInterceptor() {
-    if (!originalFetch) return;
+    if (!originalFetch) {
+      console.warn('[AmexDash] Cannot install fetch interceptor — fetch not available');
+      return;
+    }
+    console.log('[AmexDash] Fetch interceptor installed');
     window.fetch = function() {
       try {
         var url = typeof arguments[0] === 'string' ? arguments[0] : (arguments[0] && arguments[0].url) || '';
@@ -115,6 +120,7 @@
                 var data = JSON.parse(text);
                 if (data && data.cardDetails && data.cardDetails.length > 0) {
                   interceptedCardDetails = data.cardDetails;
+                  console.log('[AmexDash] Intercepted ' + data.cardDetails.length + ' card details from API');
                   try { localStorage.setItem(STORAGE_KEY_CARDS, JSON.stringify(data.cardDetails)); } catch(e) {}
                 }
               }
@@ -195,7 +201,7 @@
   let originalContent = null;
   let dashboardGeneration = 0;
 
-  console.log('[AmexDash] Script loaded');
+  console.log('[AmexDash] v1.0.0 loaded | readyState=' + document.readyState + ' | fetch=' + (typeof originalFetch) + ' | body=' + !!document.body);
 
   // ============================================================
   // Module 1: API Client
@@ -1540,7 +1546,10 @@
    */
   function injectNavLink() {
     if (document.getElementById('amex-dash-nav-link')) return;
-    if (!document.body) return; // body not ready yet — MutationObserver will retry
+    if (!document.body) {
+      console.log('[AmexDash] Button inject skipped — document.body not ready');
+      return;
+    }
 
     // Use a fixed floating button — reliable regardless of Amex's nav DOM structure
     const btn = document.createElement('button');
@@ -1579,6 +1588,7 @@
   async function showDashboard(forceRefresh = false) {
     if (dashboardActive && !forceRefresh) return;
     dashboardActive = true;
+    console.log('[AmexDash] Opening dashboard | tokens=' + interceptedTokens.length + ' | cachedCards=' + interceptedCardDetails.length + ' | force=' + forceRefresh);
     const gen = ++dashboardGeneration;
 
     // Hide existing page content
@@ -1791,8 +1801,13 @@
 
   // Kick off — handle all possible document states
   if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    console.log('[AmexDash] DOM already ready, calling init()');
     init();
   } else {
-    document.addEventListener('DOMContentLoaded', init);
+    console.log('[AmexDash] Waiting for DOMContentLoaded...');
+    document.addEventListener('DOMContentLoaded', function() {
+      console.log('[AmexDash] DOMContentLoaded fired');
+      init();
+    });
   }
 })();
