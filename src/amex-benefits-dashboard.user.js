@@ -339,30 +339,44 @@
         }
       }
       // Method 2: Inject a script element to read page globals (bypasses isolated world)
+      // Note: may be blocked by CSP on Safari/strict Chrome — Method 3 below is the fallback
       if (tokens.length === 0) {
-        var extractScript = document.createElement('script');
-        extractScript.textContent = '(' + function() {
-          try {
-            var state = window.__INITIAL_STATE__ || window.__ONE_INITIAL_STATE__;
-            if (state) {
-              var json = JSON.stringify(state);
-              var re = /\"accountToken\"\s*:\s*\"([A-Z0-9]{10,20})\"/g;
-              var tokens = [], seen = {}, m;
-              while ((m = re.exec(json)) !== null) {
-                if (!seen[m[1]]) { seen[m[1]] = true; tokens.push(m[1]); }
+        try {
+          var extractScript = document.createElement('script');
+          extractScript.textContent = '(' + function() {
+            try {
+              var state = window.__INITIAL_STATE__ || window.__ONE_INITIAL_STATE__;
+              if (state) {
+                var json = JSON.stringify(state);
+                var re = /\"accountToken\"\s*:\s*\"([A-Z0-9]{10,20})\"/g;
+                var tokens = [], seen = {}, m;
+                while ((m = re.exec(json)) !== null) {
+                  if (!seen[m[1]]) { seen[m[1]] = true; tokens.push(m[1]); }
+                }
+                if (tokens.length > 0) {
+                  document.documentElement.setAttribute('data-amexdash-tokens', JSON.stringify(tokens));
+                }
               }
-              if (tokens.length > 0) {
-                document.documentElement.setAttribute('data-amexdash-tokens', JSON.stringify(tokens));
-              }
-            }
-          } catch(e) {}
-        } + ')();';
-        document.documentElement.appendChild(extractScript);
-        extractScript.remove();
-        var attr = document.documentElement.getAttribute('data-amexdash-tokens');
-        if (attr) {
-          document.documentElement.removeAttribute('data-amexdash-tokens');
-          try { tokens = JSON.parse(attr); } catch(e) {}
+            } catch(e) {}
+          } + ')();';
+          document.documentElement.appendChild(extractScript);
+          extractScript.remove();
+          var attr = document.documentElement.getAttribute('data-amexdash-tokens');
+          if (attr) {
+            document.documentElement.removeAttribute('data-amexdash-tokens');
+            try { tokens = JSON.parse(attr); } catch(e) {}
+          }
+        } catch(e) {
+          // CSP blocked script injection — fall through to Method 3
+        }
+      }
+      // Method 3: CSP-safe — scan the raw page HTML for token patterns (Safari/strict CSP fallback)
+      if (tokens.length === 0) {
+        var html = document.documentElement.innerHTML || '';
+        var htmlRe = /\"accountToken\"\s*:\s*\"([A-Z0-9]{10,20})\"/g;
+        var hm;
+        while ((hm = htmlRe.exec(html)) !== null) {
+          if (!seen[hm[1]]) { seen[hm[1]] = true; tokens.push(hm[1]); }
         }
       }
     } catch(e) {
