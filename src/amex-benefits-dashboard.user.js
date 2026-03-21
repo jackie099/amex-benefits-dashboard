@@ -375,9 +375,9 @@
    * Fetch loyalty accounts to get displayAccountNumber mappings.
    * Calls ReadLoyaltyAccounts.v1.
    */
-  async function fetchLoyaltyAccounts(accountToken) {
+  async function fetchLoyaltyAccounts(accountTokens) {
     const body = {
-      accountTokens: [accountToken],
+      accountTokens: Array.isArray(accountTokens) ? accountTokens : [accountTokens],
       productType: 'AEXP_CARD_ACCOUNT',
     };
     const data = await amexApiFetch(
@@ -537,6 +537,19 @@
     var key = benefitId + '|' + accountToken;
     if (!history[key]) history[key] = {};
     history[key][periodKey] = spent;
+
+    // Prune entries older than 13 months
+    var cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - 13);
+    var cutoffStr = cutoff.toISOString().slice(0, 10);
+    for (var pk in history[key]) {
+      // periodKey format: "startDate_endDate" — check if endDate is before cutoff
+      var endDate = pk.split('_')[1] || '';
+      if (endDate && endDate.slice(0, 10) < cutoffStr) {
+        delete history[key][pk];
+      }
+    }
+
     try { localStorage.setItem(STORAGE_KEY_HISTORY, JSON.stringify(history)); } catch(e) {}
   }
 
@@ -544,12 +557,14 @@
     var history = getHistory();
     var key = benefitId + '|' + accountToken;
     var periods = history[key];
-    if (!periods || Object.keys(periods).length <= 1) return null; // need >1 period to be useful
+    if (!periods || Object.keys(periods).length <= 1) return null;
     var total = 0;
     var currentYear = new Date().getFullYear().toString();
     for (var periodKey in periods) {
-      // Only sum periods from the current year
-      if (periodKey.indexOf(currentYear) !== -1) {
+      // Use the period END date's year to determine if it belongs to current year
+      var endDate = (periodKey.split('_')[1] || '').slice(0, 10);
+      var endYear = endDate.slice(0, 4);
+      if (endYear === currentYear) {
         total += periods[periodKey];
       }
     }
@@ -1134,7 +1149,8 @@
   }
 
   function formatCurrency(amount, symbol = '$') {
-    return `${symbol}${amount.toFixed(2)}`;
+    const safe = escapeHtml(symbol);
+    return `${safe}${amount.toFixed(2)}`;
   }
 
   function renderDashboard(container, summary, cardCount) {
@@ -1585,9 +1601,16 @@
   /**
    * Main orchestrator: fetch data, aggregate, render.
    */
+  let dashboardLoading = false;
+
   async function showDashboard(forceRefresh = false) {
     if (dashboardActive && !forceRefresh) return;
+    if (dashboardLoading && forceRefresh) {
+      // Cancel current load by bumping generation
+      dashboardGeneration++;
+    }
     dashboardActive = true;
+    dashboardLoading = true;
     console.log('[AmexDash] Opening dashboard | tokens=' + interceptedTokens.length + ' | cachedCards=' + interceptedCardDetails.length + ' | force=' + forceRefresh);
     const gen = ++dashboardGeneration;
 
@@ -1633,7 +1656,7 @@
       let displayNumberMap = {};
       try {
         if (cardDetails.length > 0) {
-          displayNumberMap = await fetchLoyaltyAccounts(cardDetails[0].accountToken);
+          displayNumberMap = await fetchLoyaltyAccounts(cardDetails.map(function(c) { return c.accountToken; }));
         }
       } catch (err) {
         console.warn('[AmexDash] Could not fetch display numbers:', err.message);
@@ -1704,11 +1727,14 @@
         renderError(dashBody, 'Failed to load benefits', err.message);
       }
       console.error('[AmexDash] Dashboard error:', err);
+    } finally {
+      dashboardLoading = false;
     }
   }
 
   function leaveDashboard() {
     dashboardActive = false;
+    dashboardLoading = false;
 
     const overlay = document.getElementById('amex-dash-container');
     if (overlay) {
