@@ -110,22 +110,26 @@
 
         // Intercept ALL Amex API responses to capture tokens + card details
         return originalFetch.apply(this, arguments).then(function(response) {
-          var clone = response.clone();
-          clone.text().then(function(text) {
-            try {
-              if (text.indexOf('accountToken') !== -1) {
-                saveTokens(extractTokensFromJson(text));
-              }
-              if (url.indexOf('ReadLoyaltyBenefitsCardProduct') !== -1) {
-                var data = JSON.parse(text);
-                if (data && data.cardDetails && data.cardDetails.length > 0) {
-                  interceptedCardDetails = data.cardDetails;
-                  console.log('[AmexDash] Intercepted ' + data.cardDetails.length + ' card details from API');
-                  try { localStorage.setItem(STORAGE_KEY_CARDS, JSON.stringify(data.cardDetails)); } catch(e) {}
+          try {
+            var clone = response.clone();
+            clone.text().then(function(text) {
+              try {
+                if (text.indexOf('accountToken') !== -1) {
+                  saveTokens(extractTokensFromJson(text));
                 }
-              }
-            } catch(e) {}
-          }).catch(function(){});
+                if (url.indexOf('ReadLoyaltyBenefitsCardProduct') !== -1) {
+                  var data = JSON.parse(text);
+                  if (data && data.cardDetails && data.cardDetails.length > 0) {
+                    interceptedCardDetails = data.cardDetails;
+                    console.log('[AmexDash] Intercepted ' + data.cardDetails.length + ' card details from API');
+                    try { localStorage.setItem(STORAGE_KEY_CARDS, JSON.stringify(data.cardDetails)); } catch(e) {}
+                  }
+                }
+              } catch(e) {}
+            }).catch(function(){});
+          } catch(e) {
+            // Never let interceptor processing errors affect the page's fetch
+          }
           return response;
         });
       } catch(e) {
@@ -388,7 +392,7 @@
     const displayMap = {};
     if (Array.isArray(data)) {
       for (const entry of data) {
-        if (entry.relationships) {
+        if (Array.isArray(entry.relationships)) {
           for (const rel of entry.relationships) {
             if (rel.accountToken && rel.displayAccountNumber) {
               displayMap[rel.accountToken] = rel.displayAccountNumber;
@@ -581,7 +585,7 @@
     const grouped = new Map();
 
     for (const result of trackerResults) {
-      if (result.error || !result.trackers) continue;
+      if (result.error || !Array.isArray(result.trackers)) continue;
 
       const cardInfo = cardInfoMap[result.accountToken];
       if (!cardInfo) continue;

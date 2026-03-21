@@ -1,6 +1,6 @@
 # Personal data - NEVER commit
-tools/plat.txt
-tools/bizplat.txt
+tools/*.txt
+tools/*.json
 
 # Build artifacts
 firebase-debug.log
