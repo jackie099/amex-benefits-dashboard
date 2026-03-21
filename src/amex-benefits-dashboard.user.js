@@ -8,6 +8,8 @@
 // @match        https://www.americanexpress.com/*
 // @grant        none
 // @run-at       document-start
+// @inject-into  page
+// @sandbox      raw
 // ==/UserScript==
 
 (function () {
@@ -317,11 +319,63 @@
   }
 
   /**
-   * Extract account tokens from the page's __INITIAL_STATE__.
-   * Injects a script element to read from the page context (bypasses eval restrictions).
+   * Extract account tokens from the page's DOM or inline scripts.
+   * Fallback for when fetch interception doesn't work (Chrome MV3 isolated world).
    */
+  function extractTokensFromDOM() {
+    var tokens = [];
+    var seen = {};
+    try {
+      // Method 1: Look for tokens in inline script tags (page bootstrap data)
+      var scripts = document.querySelectorAll('script:not([src])');
+      for (var i = 0; i < scripts.length; i++) {
+        var text = scripts[i].textContent || '';
+        if (text.indexOf('accountToken') !== -1) {
+          var re = /\"accountToken\"\s*:\s*\"([A-Z0-9]{10,20})\"/g;
+          var m;
+          while ((m = re.exec(text)) !== null) {
+            if (!seen[m[1]]) { seen[m[1]] = true; tokens.push(m[1]); }
+          }
+        }
+      }
+      // Method 2: Inject a script element to read page globals (bypasses isolated world)
+      if (tokens.length === 0) {
+        var extractScript = document.createElement('script');
+        extractScript.textContent = '(' + function() {
+          try {
+            var state = window.__INITIAL_STATE__ || window.__ONE_INITIAL_STATE__;
+            if (state) {
+              var json = JSON.stringify(state);
+              var re = /\"accountToken\"\s*:\s*\"([A-Z0-9]{10,20})\"/g;
+              var tokens = [], seen = {}, m;
+              while ((m = re.exec(json)) !== null) {
+                if (!seen[m[1]]) { seen[m[1]] = true; tokens.push(m[1]); }
+              }
+              if (tokens.length > 0) {
+                document.documentElement.setAttribute('data-amexdash-tokens', JSON.stringify(tokens));
+              }
+            }
+          } catch(e) {}
+        } + ')();';
+        document.documentElement.appendChild(extractScript);
+        extractScript.remove();
+        var attr = document.documentElement.getAttribute('data-amexdash-tokens');
+        if (attr) {
+          document.documentElement.removeAttribute('data-amexdash-tokens');
+          try { tokens = JSON.parse(attr); } catch(e) {}
+        }
+      }
+    } catch(e) {
+      console.warn('[AmexDash] DOM token extraction failed:', e.message);
+    }
+    if (tokens.length > 0) {
+      console.log('[AmexDash] Extracted ' + tokens.length + ' tokens from DOM');
+    }
+    return tokens;
+  }
+
   /**
-   * Get card details from intercepted data, localStorage cache, or API call.
+   * Get card details from intercepted data, localStorage cache, DOM extraction, or API call.
    * Returns array of card detail objects.
    */
   async function getCardDetails() {
@@ -343,13 +397,20 @@
       }
     } catch(e) {}
 
-    // 3. Try fetching card details using intercepted or cached tokens
+    // 3. Try fetching card details using intercepted, cached, or DOM-extracted tokens
     var tokens = interceptedTokens.length > 0 ? interceptedTokens : [];
     if (tokens.length === 0) {
       try {
         var cachedTokens = localStorage.getItem(STORAGE_KEY_TOKENS);
         if (cachedTokens) tokens = JSON.parse(cachedTokens);
       } catch(e) {}
+    }
+    // Fallback: extract tokens from DOM (works even when fetch interception fails on Chrome)
+    if (tokens.length === 0) {
+      tokens = extractTokensFromDOM();
+      if (tokens.length > 0) {
+        saveTokens(tokens);
+      }
     }
 
     if (tokens.length > 0) {
