@@ -6,16 +6,14 @@
 // @description  Unified benefits credit tracker across all Amex cards
 // @match        https://global.americanexpress.com/*
 // @match        https://www.americanexpress.com/*
+// @match        https://*.americanexpress.com/*
 // @grant        none
 // @run-at       document-start
-// @inject-into  page
-// @sandbox      raw
 // ==/UserScript==
 
 (function () {
   'use strict';
 
-  // With @grant none + @run-at document-start, we run in the page context directly
   const pageWindow = window;
 
   // ============================================================
@@ -1920,15 +1918,31 @@
     }
   }
 
-  // Kick off — handle all possible document states
-  if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    console.log('[AmexDash] DOM already ready, calling init()');
+  var didInit = false;
+  function startInit(reason) {
+    if (didInit) return;
+    didInit = true;
+    console.log('[AmexDash] Starting init via ' + reason);
     init();
+  }
+
+  if (document.readyState === 'complete' || document.readyState === 'interactive') {
+    startInit('readyState=' + document.readyState);
   } else {
     console.log('[AmexDash] Waiting for DOMContentLoaded...');
     document.addEventListener('DOMContentLoaded', function() {
-      console.log('[AmexDash] DOMContentLoaded fired');
-      init();
-    });
+      startInit('DOMContentLoaded');
+    }, { once: true });
   }
+
+  var fallbackChecks = 0;
+  var fallbackTimer = setInterval(function() {
+    fallbackChecks++;
+    if (didInit || document.body || document.readyState !== 'loading' || fallbackChecks >= 100) {
+      clearInterval(fallbackTimer);
+      if (!didInit) {
+        startInit('fallback-check');
+      }
+    }
+  }, 100);
 })();
