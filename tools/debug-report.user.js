@@ -112,6 +112,63 @@
     log('Fetch interceptor installed');
   }
 
+  // Actively fetch trackers for ALL cards (don't rely on page's own API calls)
+  async function fetchAllTrackers() {
+    if (capturedCards.length === 0) {
+      log('No cards to fetch trackers for — visit a benefits page first');
+      return;
+    }
+    log('Fetching trackers for all ' + capturedCards.length + ' cards...');
+    // Get full tokens (not truncated) from capturedTokens
+    for (var i = 0; i < capturedTokens.length; i++) {
+      var token = capturedTokens[i];
+      var tokenShort = token.slice(0, 6) + '...';
+      try {
+        var resp = await originalFetch('https://functions.americanexpress.com/ReadBestLoyaltyBenefitsTrackers.v1', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify([{ accountToken: token, locale: 'en-US', limit: 'ALL' }]),
+        });
+        var data = await resp.json();
+        if (Array.isArray(data)) {
+          data.forEach(function (entry) {
+            var trackers = entry.trackers || [];
+            var byCategory = {};
+            var benefitList = [];
+            trackers.forEach(function (t) {
+              byCategory[t.category] = (byCategory[t.category] || 0) + 1;
+              benefitList.push({
+                id: t.benefitId,
+                name: t.benefitName,
+                category: t.category,
+                duration: t.trackerDuration,
+                target: t.tracker ? t.tracker.targetAmount : 'N/A',
+                spent: t.tracker ? t.tracker.spentAmount : 'N/A',
+                period: (t.periodStartDate || '').slice(0, 10) + ' to ' + (t.periodEndDate || '').slice(0, 10),
+              });
+            });
+            // Avoid duplicates — check if we already have trackers for this token
+            var exists = capturedTrackers.some(function (ct) { return ct.token === tokenShort; });
+            if (!exists) {
+              capturedTrackers.push({
+                token: tokenShort,
+                total: trackers.length,
+                categories: byCategory,
+                benefits: benefitList,
+              });
+            }
+            var catStr = Object.entries(byCategory).map(function (e) { return e[0] + ':' + e[1]; }).join(', ');
+            log('Trackers for ' + tokenShort + ': ' + trackers.length + (catStr ? ' (' + catStr + ')' : ' (empty)'));
+          });
+        }
+      } catch (e) {
+        log('ERROR fetching trackers for ' + tokenShort + ': ' + e.message);
+      }
+    }
+    log('All tracker fetches complete');
+  }
+
   // UI
   document.addEventListener('DOMContentLoaded', function () {
     log('DOMContentLoaded fired');
@@ -119,7 +176,14 @@
     var btn = document.createElement('button');
     btn.textContent = 'AmexDash Debug Report';
     btn.style.cssText = 'position:fixed;bottom:70px;left:24px;z-index:99999;background:#c62828;color:#fff;border:none;padding:12px 24px;border-radius:24px;cursor:pointer;font-size:14px;font-weight:600;box-shadow:0 4px 12px rgba(0,0,0,0.3);font-family:-apple-system,sans-serif;';
-    btn.addEventListener('click', showReport);
+    btn.addEventListener('click', async function () {
+      btn.textContent = 'Fetching all cards...';
+      btn.disabled = true;
+      await fetchAllTrackers();
+      btn.textContent = 'AmexDash Debug Report';
+      btn.disabled = false;
+      showReport();
+    });
     document.body.appendChild(btn);
 
     function showReport() {
