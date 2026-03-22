@@ -4,8 +4,11 @@
 // @version      0.1.0
 // @description  Capture API schemas for benefits dashboard development
 // @match        https://global.americanexpress.com/*
+// @match        https://www.americanexpress.com/*
 // @grant        none
 // @run-at       document-start
+// @inject-into  page
+// @sandbox      raw
 // ==/UserScript==
 
 (function () {
@@ -21,6 +24,11 @@
   const captured = {};
 
   const originalFetch = window.fetch;
+  if (!originalFetch) {
+    console.warn('[API Discovery] window.fetch not available at document-start; interceptor not installed.');
+    return;
+  }
+
   window.fetch = async function (...args) {
     const [url, options] = args;
     const urlStr = typeof url === 'string' ? url : url.url;

@@ -114,11 +114,11 @@
 
   // Actively fetch trackers for ALL cards (don't rely on page's own API calls)
   async function fetchAllTrackers() {
-    if (capturedCards.length === 0) {
-      log('No cards to fetch trackers for — visit a benefits page first');
+    if (capturedTokens.length === 0) {
+      log('No tokens captured — visit a benefits page first');
       return;
     }
-    log('Fetching trackers for all ' + capturedCards.length + ' cards...');
+    log('Fetching trackers for all ' + capturedTokens.length + ' captured tokens...');
     // Get full tokens (not truncated) from capturedTokens
     for (var i = 0; i < capturedTokens.length; i++) {
       var token = capturedTokens[i];

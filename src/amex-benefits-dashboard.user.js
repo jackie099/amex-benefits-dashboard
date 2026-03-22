@@ -110,8 +110,12 @@
           } catch(e) {}
         }
 
-        // Intercept ALL Amex API responses to capture tokens + card details
+        // Only inspect response bodies for target endpoints
         return originalFetch.apply(this, arguments).then(function(response) {
+          var shouldInspectResponse =
+            url.indexOf('ReadLoyaltyBenefitsCardProduct') !== -1 ||
+            url.indexOf('accountToken') !== -1;
+          if (!shouldInspectResponse) return response;
           try {
             var clone = response.clone();
             clone.text().then(function(text) {
@@ -724,7 +728,7 @@
         const periodKey = (t.periodStartDate || '') + '_' + (t.periodEndDate || '');
         selfTrackPeriod(t.benefitId, result.accountToken, periodKey, spent);
 
-        // Fallback chain: API YTD > message YTD > self-tracked > current period
+        // Fallback chain: API totalSavingsYearToDate > self-tracked > current period
         const selfTrackedYtd = getSelfTrackedYtd(t.benefitId, result.accountToken);
         const effectiveYtd = ytd !== null ? ytd : (selfTrackedYtd !== null ? selfTrackedYtd : spent);
 
