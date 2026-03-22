@@ -663,7 +663,19 @@
       if (result.error || !Array.isArray(result.trackers)) continue;
 
       const cardInfo = cardInfoMap[result.accountToken];
-      if (!cardInfo) continue;
+      if (!cardInfo) {
+        console.warn('[AmexDash] No card info for token:', result.accountToken, '— skipping', result.trackers.length, 'trackers');
+        continue;
+      }
+
+      // Debug: log per-card tracker breakdown
+      var usageCount = 0, skippedCategories = {};
+      for (var _t of result.trackers) {
+        if (_t.category === 'usage') { usageCount++; }
+        else { skippedCategories[_t.category] = (skippedCategories[_t.category] || 0) + 1; }
+      }
+      var skippedStr = Object.entries(skippedCategories).map(function(e) { return e[0] + ':' + e[1]; }).join(', ');
+      console.log('[AmexDash] ' + cardInfo.label + ': ' + result.trackers.length + ' trackers (' + usageCount + ' usage' + (skippedStr ? ', skipped ' + skippedStr : '') + ')');
 
       for (const t of result.trackers) {
         // Filter: only usage trackers (skip spend-threshold trackers like Centurion lounge)
