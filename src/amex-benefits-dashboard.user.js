@@ -110,11 +110,13 @@
           } catch(e) {}
         }
 
-        // Only inspect response bodies for target endpoints
+        // Inspect response bodies from endpoints that contain account data
         return originalFetch.apply(this, arguments).then(function(response) {
           var shouldInspectResponse =
             url.indexOf('ReadLoyaltyBenefitsCardProduct') !== -1 ||
-            url.indexOf('accountToken') !== -1;
+            url.indexOf('ReadLoyaltyAccounts') !== -1 ||
+            url.indexOf('ReadCustomerOverview') !== -1 ||
+            url.indexOf('ReadBestLoyaltyBenefitsTrackers') !== -1;
           if (!shouldInspectResponse) return response;
           try {
             var clone = response.clone();
@@ -335,10 +337,10 @@
       for (var i = 0; i < scripts.length; i++) {
         var text = scripts[i].textContent || '';
         if (text.indexOf('accountToken') !== -1) {
-          var re = /\"accountToken\"\s*:\s*\"([A-Z0-9]{10,20})\"/g;
-          var m;
-          while ((m = re.exec(text)) !== null) {
-            if (!seen[m[1]]) { seen[m[1]] = true; tokens.push(m[1]); }
+          // Match both "accountToken":"TOKEN" and "accountTokens":["TOKEN1","TOKEN2"]
+          var found = extractTokensFromJson(text);
+          for (var fi = 0; fi < found.length; fi++) {
+            if (!seen[found[fi]]) { seen[found[fi]] = true; tokens.push(found[fi]); }
           }
         }
       }
@@ -352,10 +354,16 @@
               var state = window.__INITIAL_STATE__ || window.__ONE_INITIAL_STATE__;
               if (state) {
                 var json = JSON.stringify(state);
-                var re = /\"accountToken\"\s*:\s*\"([A-Z0-9]{10,20})\"/g;
+                var re = /\"accountToken[s]?\"\s*:\s*(?:\"([A-Z0-9]{10,20})\"|\[([^\]]*)\])/g;
                 var tokens = [], seen = {}, m;
                 while ((m = re.exec(json)) !== null) {
-                  if (!seen[m[1]]) { seen[m[1]] = true; tokens.push(m[1]); }
+                  if (m[1] && !seen[m[1]]) { seen[m[1]] = true; tokens.push(m[1]); }
+                  if (m[2]) {
+                    var arrRe = /\"([A-Z0-9]{10,20})\"/g; var am;
+                    while ((am = arrRe.exec(m[2])) !== null) {
+                      if (!seen[am[1]]) { seen[am[1]] = true; tokens.push(am[1]); }
+                    }
+                  }
                 }
                 if (tokens.length > 0) {
                   document.documentElement.setAttribute('data-amexdash-tokens', JSON.stringify(tokens));
@@ -377,10 +385,9 @@
       // Method 3: CSP-safe — scan the raw page HTML for token patterns (Safari/strict CSP fallback)
       if (tokens.length === 0) {
         var html = document.documentElement.innerHTML || '';
-        var htmlRe = /\"accountToken\"\s*:\s*\"([A-Z0-9]{10,20})\"/g;
-        var hm;
-        while ((hm = htmlRe.exec(html)) !== null) {
-          if (!seen[hm[1]]) { seen[hm[1]] = true; tokens.push(hm[1]); }
+        var found = extractTokensFromJson(html);
+        for (var hi = 0; hi < found.length; hi++) {
+          if (!seen[found[hi]]) { seen[found[hi]] = true; tokens.push(found[hi]); }
         }
       }
     } catch(e) {
