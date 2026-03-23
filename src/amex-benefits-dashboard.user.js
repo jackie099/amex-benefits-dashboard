@@ -695,6 +695,7 @@
             benefitName: t.benefitName,
             trackerDuration: period.duration,
             durationLabel: period.label,
+            category: t.category,
             periodStartDate: t.periodStartDate,
             periodEndDate: t.periodEndDate,
             daysRemaining: daysUntil(t.periodEndDate),
@@ -771,12 +772,22 @@
     let fullyUsed = 0;
     let partiallyUsed = 0;
     let unused = 0;
+    let creditCount = 0;
+    let spendGoalCount = 0;
 
     for (const [, benefit] of grouped) {
-      annualTotal += benefit.annualTarget;
-      annualYtd += benefit.annualYtd;
-      periodTotal += benefit.totalTarget;
-      periodUsed += benefit.totalSpent;
+      const isSpendGoal = benefit.category === 'spend';
+
+      // Only include actual credits (usage/loan) in dollar summary, not spend thresholds
+      if (!isSpendGoal) {
+        annualTotal += benefit.annualTarget;
+        annualYtd += benefit.annualYtd;
+        periodTotal += benefit.totalTarget;
+        periodUsed += benefit.totalSpent;
+        creditCount++;
+      } else {
+        spendGoalCount++;
+      }
 
       const pct = benefit.totalTarget > 0
         ? (benefit.totalSpent / benefit.totalTarget) * 100
@@ -794,6 +805,8 @@
       periodTotal,
       periodUsed,
       benefitCount: grouped.size,
+      creditCount,
+      spendGoalCount,
       fullyUsed,
       partiallyUsed,
       unused,
