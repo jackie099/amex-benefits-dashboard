@@ -59,7 +59,7 @@
       }
     }
     if (added) {
-      console.log('[AmexDash] Captured ' + interceptedTokens.length + ' account tokens');
+      console.debug('[AmexDash] Captured ' + interceptedTokens.length + ' account tokens');
       try { localStorage.setItem(STORAGE_KEY_TOKENS, JSON.stringify(interceptedTokens)); } catch(e) {}
     }
   }
@@ -89,7 +89,7 @@
       console.warn('[AmexDash] Cannot install fetch interceptor — fetch not available');
       return;
     }
-    console.log('[AmexDash] Fetch interceptor installed');
+    console.debug('[AmexDash] Fetch interceptor installed');
     window.fetch = function() {
       try {
         var url = typeof arguments[0] === 'string' ? arguments[0] : (arguments[0] && arguments[0].url) || '';
@@ -127,7 +127,7 @@
                   var data = JSON.parse(text);
                   if (data && data.cardDetails && data.cardDetails.length > 0) {
                     interceptedCardDetails = data.cardDetails;
-                    console.log('[AmexDash] Intercepted ' + data.cardDetails.length + ' card details from API');
+                    console.debug('[AmexDash] Intercepted ' + data.cardDetails.length + ' card details from API');
                     try { localStorage.setItem(STORAGE_KEY_CARDS, JSON.stringify(data.cardDetails)); } catch(e) {}
                   }
                 }
@@ -387,7 +387,7 @@
       console.warn('[AmexDash] DOM token extraction failed:', e.message);
     }
     if (tokens.length > 0) {
-      console.log('[AmexDash] Extracted ' + tokens.length + ' tokens from DOM');
+      console.debug('[AmexDash] Extracted ' + tokens.length + ' tokens from DOM');
     }
     return tokens;
   }
@@ -399,7 +399,7 @@
   async function getCardDetails() {
     // 1. Try intercepted card details from this page load
     if (interceptedCardDetails.length > 0) {
-      console.log('[AmexDash] Using intercepted card details:', interceptedCardDetails.length);
+      console.debug('[AmexDash] Using intercepted card details:', interceptedCardDetails.length);
       return interceptedCardDetails;
     }
 
@@ -409,7 +409,7 @@
       if (cached) {
         var parsed = JSON.parse(cached);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          console.log('[AmexDash] Using cached card details:', parsed.length);
+          console.debug('[AmexDash] Using cached card details:', parsed.length);
           return parsed;
         }
       }
@@ -432,7 +432,7 @@
     }
 
     if (tokens.length > 0) {
-      console.log('[AmexDash] Fetching card details using', tokens.length, 'captured tokens');
+      console.debug('[AmexDash] Fetching card details using', tokens.length, 'captured tokens');
       try {
         var data = await amexApiFetch('/ReadLoyaltyBenefitsCardProduct.v1', {
           accountTokens: tokens,
@@ -672,14 +672,10 @@
         continue;
       }
 
-      // Debug: log per-card tracker breakdown
-      var usageCount = 0, skippedCategories = {};
-      for (var _t of result.trackers) {
-        if (_t.category === 'usage') { usageCount++; }
-        else { skippedCategories[_t.category] = (skippedCategories[_t.category] || 0) + 1; }
-      }
-      var skippedStr = Object.entries(skippedCategories).map(function(e) { return e[0] + ':' + e[1]; }).join(', ');
-      console.log('[AmexDash] ' + cardInfo.label + ': ' + result.trackers.length + ' trackers (' + usageCount + ' usage' + (skippedStr ? ', skipped ' + skippedStr : '') + ')');
+      // Per-card tracker breakdown (debug level — hidden by default in console)
+      var cats = {};
+      result.trackers.forEach(function(_t) { cats[_t.category] = (cats[_t.category] || 0) + 1; });
+      console.debug('[AmexDash] ' + cardInfo.label + ': ' + result.trackers.length + ' trackers', cats);
 
       for (const t of result.trackers) {
         // Skip access (visit counters like Delta Sky Club visits)
@@ -1944,12 +1940,12 @@
 
   // Kick off — handle all possible document states
   if (document.readyState === 'complete' || document.readyState === 'interactive') {
-    console.log('[AmexDash] DOM already ready, calling init()');
+    console.debug('[AmexDash] DOM already ready, calling init()');
     init();
   } else {
-    console.log('[AmexDash] Waiting for DOMContentLoaded...');
+    console.debug('[AmexDash] Waiting for DOMContentLoaded...');
     document.addEventListener('DOMContentLoaded', function() {
-      console.log('[AmexDash] DOMContentLoaded fired');
+      console.debug('[AmexDash] DOMContentLoaded fired');
       init();
     });
   }
