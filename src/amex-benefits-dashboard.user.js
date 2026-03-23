@@ -682,17 +682,21 @@
       console.log('[AmexDash] ' + cardInfo.label + ': ' + result.trackers.length + ' trackers (' + usageCount + ' usage' + (skippedStr ? ', skipped ' + skippedStr : '') + ')');
 
       for (const t of result.trackers) {
-        // Include usage (credits), loan (Delta credits), spend (progress toward earning credits)
         // Skip access (visit counters like Delta Sky Club visits)
         if (t.category === 'access') continue;
+        // Skip non-monetary trackers (e.g., "Earn 20% More Points" = 20 transactions)
+        if (t.tracker && t.tracker.targetUnit && t.tracker.targetUnit !== 'MONETARY') continue;
 
         const key = t.benefitId;
         const period = detectPeriod(t.trackerDuration, t.periodStartDate, t.periodEndDate);
 
+        // Use progress.title as display name — benefitName changes to "Congratulations!" when achieved
+        const displayName = (t.progress && t.progress.title) || t.benefitName;
+
         if (!grouped.has(key)) {
           grouped.set(key, {
             benefitId: t.benefitId,
-            benefitName: t.benefitName,
+            benefitName: displayName,
             trackerDuration: period.duration,
             durationLabel: period.label,
             category: t.category,
@@ -715,6 +719,10 @@
         }
 
         const group = grouped.get(key);
+        // Update display name if current one is generic (e.g., "Congratulations!")
+        if (group.benefitName === 'Congratulations!' && displayName !== 'Congratulations!') {
+          group.benefitName = displayName;
+        }
         const target = parseFloat(t.tracker?.targetAmount || '0');
         const spent = parseFloat(t.tracker?.spentAmount || '0');
         const remaining = parseFloat(t.tracker?.remainingAmount || '0');
