@@ -682,8 +682,9 @@
       console.log('[AmexDash] ' + cardInfo.label + ': ' + result.trackers.length + ' trackers (' + usageCount + ' usage' + (skippedStr ? ', skipped ' + skippedStr : '') + ')');
 
       for (const t of result.trackers) {
-        // Filter: only usage trackers (skip spend-threshold trackers like Centurion lounge)
-        if (t.category !== 'usage') continue;
+        // Include "usage" (most credits) and "loan" (Delta credits etc.)
+        // Skip "spend" (spending thresholds like Centurion lounge $75k) and "access" (visit counters)
+        if (t.category !== 'usage' && t.category !== 'loan') continue;
 
         const key = t.benefitId;
         const period = detectPeriod(t.trackerDuration, t.periodStartDate, t.periodEndDate);
