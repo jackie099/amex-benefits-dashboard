@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amex Benefits Dashboard
 // @namespace    https://github.com/amex-benefits-dashboard
-// @version      1.2.0
+// @version      1.3.0
 // @author       jackie099
 // @description  Unified benefits credit tracker across all Amex cards
 // @match        https://global.americanexpress.com/*
@@ -86,16 +86,50 @@
     return result;
   }
 
+  function tokenListsEqual(left, right) {
+    if (left.length !== right.length) return false;
+    for (var i = 0; i < left.length; i++) {
+      if (left[i] !== right[i]) return false;
+    }
+    return true;
+  }
+
+  // Replace the persisted token set after validation. Unlike saveTokens(), this
+  // intentionally drops stale tokens rejected by the current Amex session.
+  function replaceTokens(tokens) {
+    var next = mergeTokens(tokens);
+    interceptedTokens = next;
+    try {
+      if (next.length > 0) {
+        localStorage.setItem(STORAGE_KEY_TOKENS, JSON.stringify(next));
+      } else {
+        localStorage.removeItem(STORAGE_KEY_TOKENS);
+      }
+    } catch (e) { }
+    return next;
+  }
+
   // Merge newly seen tokens with the in-memory set AND the persisted set, so a
   // page that only exposes a subset of tokens never shrinks the stored union.
   function saveTokens(newTokens) {
     var stored = readJsonArray(STORAGE_KEY_TOKENS);
     var merged = mergeTokens(stored, interceptedTokens, newTokens);
     interceptedTokens = merged;
-    if (merged.length !== stored.length) {
+    if (!tokenListsEqual(merged, stored)) {
       console.debug('[AmexDash] Captured ' + merged.length + ' account tokens');
       try { localStorage.setItem(STORAGE_KEY_TOKENS, JSON.stringify(merged)); } catch (e) { }
     }
+  }
+
+  // Clear account-scoped caches without deleting self-tracked benefit history.
+  function clearAccountCache() {
+    interceptedCardDetails = [];
+    interceptedTokens = [];
+    try {
+      localStorage.removeItem(STORAGE_KEY_CARDS);
+      localStorage.removeItem(STORAGE_KEY_TOKENS);
+      localStorage.removeItem(STORAGE_KEY_CARDS_FETCHED_TOKENS);
+    } catch (e) { }
   }
 
   function extractTokensFromJson(str) {
@@ -129,9 +163,6 @@
         var url = typeof arguments[0] === 'string' ? arguments[0] : (arguments[0] && arguments[0].url) || '';
         var opts = arguments[1] || {};
         var isAmexApi = url.indexOf('americanexpress.com') !== -1;
-        if (url.indexOf('americanexpress.com') !== -1 || url.indexOf('aexp.com') !== -1) {
-          console.debug('[AmexDash] fetch seen:', url, opts.method || 'GET');
-        }
         var requestTokens = [];
 
         if (!isAmexApi) {
@@ -264,7 +295,7 @@
   let originalContent = null;
   let dashboardGeneration = 0;
 
-  console.log('[AmexDash] v1.0.0 loaded | readyState=' + document.readyState + ' | fetch=' + (typeof originalFetch) + ' | body=' + !!document.body);
+  console.log('[AmexDash] v1.3.0 loaded | readyState=' + document.readyState + ' | fetch=' + (typeof originalFetch) + ' | body=' + !!document.body);
 
   // ============================================================
   // Module 1: API Client
@@ -283,6 +314,11 @@
       this.name = 'RateLimitError';
       this.retryAfter = retryAfter;
     }
+  }
+
+  function isTokenAuthorizationError(error) {
+    return error instanceof SessionExpiredError &&
+      /access_denied|provided tokens? not authorized|invalid account token|IC_UE_POLICY_EXECUTION_FAILED/i.test(error.message);
   }
 
   class FetchPool {
@@ -338,33 +374,17 @@
           body: JSON.stringify(body),
         });
 
-        /*if (resp.status === 401 || resp.status === 403) {
-          throw new SessionExpiredError();
-        }
-
-        if (resp.status === 429) {
-          const retryAfter = parseInt(resp.headers.get('Retry-After') || '5', 10);
-          throw new RateLimitError(retryAfter);
-        }
-
-        if (!resp.ok) {
-          throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
-        }
-
-        return await resp.json();*/
         const text = await resp.text();
-
-        console.debug('[AmexDash] API response', {
-          endpoint,
-          status: resp.status,
-          statusText: resp.statusText,
-          bodyPreview: text.slice(0, 500),
-        });
 
         if (resp.status === 401 || resp.status === 403) {
           throw new SessionExpiredError(
             `${endpoint} returned HTTP ${resp.status}: ${text.slice(0, 200)}`
           );
+        }
+
+        if (resp.status === 429) {
+          const retryAfter = Math.max(1, parseInt(resp.headers.get('Retry-After') || '5', 10) || 5);
+          throw new RateLimitError(retryAfter);
         }
 
         if (!resp.ok) {
@@ -401,7 +421,16 @@
    */
   function extractTokensFromDOM() {
     var tokens = [];
-    var seen = {};
+    var seen = Object.create(null);
+
+    function appendTokens(found) {
+      for (var i = 0; i < found.length; i++) {
+        if (isValidAccountToken(found[i]) && !seen[found[i]]) {
+          seen[found[i]] = true;
+          tokens.push(found[i]);
+        }
+      }
+    }
     try {
       // Method 1: Look for tokens in inline script tags (page bootstrap data)
       var scripts = document.querySelectorAll('script:not([src])');
@@ -409,14 +438,18 @@
         var text = scripts[i].textContent || '';
         if (text.indexOf('accountToken') !== -1) {
           // Match both "accountToken":"TOKEN" and "accountTokens":["TOKEN1","TOKEN2"]
-          var found = extractTokensFromJson(text);
-          for (var fi = 0; fi < found.length; fi++) {
-            if (!seen[found[fi]]) { seen[found[fi]] = true; tokens.push(found[fi]); }
-          }
+          appendTokens(extractTokensFromJson(text));
         }
       }
-      // Method 2: Inject a script element to read page globals (bypasses isolated world)
-      // Note: may be blocked by CSP on Safari/strict Chrome — Method 3 below is the fallback
+
+      // Merge every available source. One selected card in an inline script must
+      // not prevent the page bootstrap state or HTML from adding other accounts.
+      try {
+        var state = pageWindow.__INITIAL_STATE__ || pageWindow.__ONE_INITIAL_STATE__;
+        if (state) appendTokens(extractTokensFromJson(JSON.stringify(state)));
+      } catch (e) { }
+      appendTokens(extractTokensFromJson(document.documentElement.innerHTML || ''));
+      // Last fallback: inject into page context when a userscript manager isolates globals.
       if (tokens.length === 0) {
         try {
           var extractScript = document.createElement('script');
@@ -457,18 +490,10 @@
           var attr = document.documentElement.getAttribute('data-amexdash-tokens');
           if (attr) {
             document.documentElement.removeAttribute('data-amexdash-tokens');
-            try { tokens = JSON.parse(attr); } catch (e) { }
+            try { appendTokens(JSON.parse(attr)); } catch (e) { }
           }
         } catch (e) {
-          // CSP blocked script injection — fall through to Method 3
-        }
-      }
-      // Method 3: CSP-safe — scan the raw page HTML for token patterns (Safari/strict CSP fallback)
-      if (tokens.length === 0) {
-        var html = document.documentElement.innerHTML || '';
-        var found = extractTokensFromJson(html);
-        for (var hi = 0; hi < found.length; hi++) {
-          if (!seen[found[hi]]) { seen[found[hi]] = true; tokens.push(found[hi]); }
+          // CSP blocked the final fallback.
         }
       }
     } catch (e) {
@@ -478,6 +503,120 @@
       console.debug('[AmexDash] Extracted ' + tokens.length + ' tokens from DOM');
     }
     return tokens;
+  }
+
+  function extractTokensFromLoyaltyAccounts(data) {
+    var tokens = [];
+    if (!Array.isArray(data)) return tokens;
+    for (var i = 0; i < data.length; i++) {
+      var entry = data[i];
+      if (!entry) continue;
+      if (entry.accountToken) tokens.push(entry.accountToken);
+      if (!Array.isArray(entry.relationships)) continue;
+      for (var j = 0; j < entry.relationships.length; j++) {
+        var relationship = entry.relationships[j];
+        if (relationship && relationship.accountToken) tokens.push(relationship.accountToken);
+      }
+    }
+    return mergeTokens(tokens);
+  }
+
+  async function discoverRelatedAccountTokens(seedTokens) {
+    var seeds = mergeTokens(seedTokens);
+    if (seeds.length === 0) return [];
+
+    try {
+      var data = await amexApiFetch('/ReadLoyaltyAccounts.v1', {
+        accountTokens: seeds,
+        productType: 'AEXP_CARD_ACCOUNT',
+      });
+      return mergeTokens(seeds, extractTokensFromLoyaltyAccounts(data));
+    } catch (bulkError) {
+      if (!isTokenAuthorizationError(bulkError)) throw bulkError;
+
+      // A stale token can poison a bulk request. Validate seeds independently
+      // and retain every account still authorized in the current session.
+      var validTokens = [];
+      for (var i = 0; i < seeds.length; i++) {
+        try {
+          var singleData = await amexApiFetch('/ReadLoyaltyAccounts.v1', {
+            accountTokens: [seeds[i]],
+            productType: 'AEXP_CARD_ACCOUNT',
+          });
+          validTokens = mergeTokens(validTokens, [seeds[i]], extractTokensFromLoyaltyAccounts(singleData));
+        } catch (singleError) {
+          if (!isTokenAuthorizationError(singleError)) throw singleError;
+          console.warn('[AmexDash] Dropping stale account token during discovery:', seeds[i].slice(0, 6));
+        }
+      }
+
+      // The card-product endpoint makes the final auth distinction when this
+      // endpoint cannot validate any seed.
+      return validTokens.length > 0 ? validTokens : seeds;
+    }
+  }
+
+  function extractCardDetails(data) {
+    return data && Array.isArray(data.cardDetails) ? data.cardDetails : [];
+  }
+
+  function mergeCardDetails() {
+    var seen = Object.create(null);
+    var result = [];
+    for (var i = 0; i < arguments.length; i++) {
+      var cards = arguments[i];
+      if (!Array.isArray(cards)) continue;
+      for (var j = 0; j < cards.length; j++) {
+        var card = cards[j];
+        if (!card || !isValidAccountToken(card.accountToken) || seen[card.accountToken]) continue;
+        seen[card.accountToken] = true;
+        result.push(card);
+      }
+    }
+    return result;
+  }
+
+  async function fetchCardDetailsForTokens(tokens) {
+    var requestedTokens = mergeTokens(tokens);
+    var requestBody = function (accountTokens) {
+      return {
+        accountTokens: accountTokens,
+        cardNames: [],
+        productType: 'AEXP_CARD_ACCOUNT',
+      };
+    };
+
+    try {
+      var data = await amexApiFetch(
+        '/ReadLoyaltyBenefitsCardProduct.v1',
+        requestBody(requestedTokens)
+      );
+      return { cardDetails: extractCardDetails(data), validTokens: requestedTokens };
+    } catch (bulkError) {
+      if (!isTokenAuthorizationError(bulkError)) throw bulkError;
+
+      var validTokens = [];
+      var cardDetails = [];
+      var lastAuthorizationError = bulkError;
+      for (var i = 0; i < requestedTokens.length; i++) {
+        var token = requestedTokens[i];
+        try {
+          var singleData = await amexApiFetch(
+            '/ReadLoyaltyBenefitsCardProduct.v1',
+            requestBody([token])
+          );
+          validTokens.push(token);
+          cardDetails = mergeCardDetails(cardDetails, extractCardDetails(singleData));
+        } catch (singleError) {
+          if (!isTokenAuthorizationError(singleError)) throw singleError;
+          lastAuthorizationError = singleError;
+          console.warn('[AmexDash] Dropping stale account token during card lookup:', token.slice(0, 6));
+        }
+      }
+
+      if (validTokens.length === 0) throw lastAuthorizationError;
+      return { cardDetails: cardDetails, validTokens: validTokens };
+    }
   }
 
   /**
@@ -493,17 +632,11 @@
    * @returns {Promise<Array|null>} Card detail objects, or null if none available.
    */
   async function getCardDetails(forceRefresh = false) {
-    // Union of every account token we've seen this session and in storage.
+    // DOM/bootstrap state may contain accounts the fetch interceptor missed. Scan
+    // even when a partial cache exists, then merge all sources before using it.
+    var domTokens = extractTokensFromDOM();
+    if (domTokens.length > 0) saveTokens(domTokens);
     var knownTokens = mergeTokens(interceptedTokens, readJsonArray(STORAGE_KEY_TOKENS));
-
-    // Last-resort discovery when fetch interception never ran (e.g. strict CSP).
-    if (knownTokens.length === 0) {
-      var domTokens = extractTokensFromDOM();
-      if (domTokens.length > 0) {
-        saveTokens(domTokens);
-        knownTokens = mergeTokens(interceptedTokens, readJsonArray(STORAGE_KEY_TOKENS));
-      }
-    }
 
     // Best available cached card set (in-memory beats persisted), if any.
     var cachedCards = null;
@@ -519,11 +652,28 @@
       }
     }
 
-    // Did a token appear that wasn't part of the last card fetch? -> new card.
     var baseline = readJsonArray(STORAGE_KEY_CARDS_FETCHED_TOKENS);
     var baselineSet = Object.create(null);
     for (var i = 0; i < baseline.length; i++) baselineSet[baseline[i]] = true;
     var hasNewToken = knownTokens.some(function (t) { return !baselineSet[t]; });
+
+    // A cold/partial cache and explicit refresh both expand a seed token through
+    // Amex's loyalty relationships before deciding the cache is complete.
+    var shouldDiscover = knownTokens.length > 0 &&
+      (forceRefresh || !cachedCards || cachedCards.length <= 1 || hasNewToken);
+    if (shouldDiscover) {
+      try {
+        var discoveredTokens = await discoverRelatedAccountTokens(knownTokens);
+        if (discoveredTokens.length > 0) knownTokens = replaceTokens(discoveredTokens);
+      } catch (discoveryError) {
+        if (discoveryError instanceof SessionExpiredError) throw discoveryError;
+        console.warn('[AmexDash] Related account discovery failed:', discoveryError.message);
+      }
+
+      baselineSet = Object.create(null);
+      for (var b = 0; b < baseline.length; b++) baselineSet[baseline[b]] = true;
+      hasNewToken = knownTokens.some(function (t) { return !baselineSet[t]; });
+    }
 
     if (cachedCards && !forceRefresh && !hasNewToken) {
       console.debug('[AmexDash] Using ' + cacheSource + ' card details:', cachedCards.length);
@@ -534,23 +684,20 @@
       var reason = forceRefresh ? 'forced refresh' : (hasNewToken ? 'new card detected' : 'no cache');
       console.debug('[AmexDash] Fetching card details for ' + knownTokens.length + ' tokens (' + reason + ')');
       try {
-        var data = await amexApiFetch('/ReadLoyaltyBenefitsCardProduct.v1', {
-          accountTokens: knownTokens,
-          cardNames: [],
-          productType: 'AEXP_CARD_ACCOUNT',
-        });
-        if (data && Array.isArray(data.cardDetails) && data.cardDetails.length > 0) {
-          interceptedCardDetails = data.cardDetails;
+        var result = await fetchCardDetailsForTokens(knownTokens);
+        knownTokens = replaceTokens(result.validTokens);
+        if (result.cardDetails.length > 0) {
+          interceptedCardDetails = result.cardDetails;
           try {
-            localStorage.setItem(STORAGE_KEY_CARDS, JSON.stringify(data.cardDetails));
+            localStorage.setItem(STORAGE_KEY_CARDS, JSON.stringify(result.cardDetails));
             // Baseline = the tokens we queried, NOT only those that mapped to a
             // card. A token with no card product (e.g. a non-card loyalty
             // account) must be remembered too, or it would look "new" forever
             // and trigger a re-fetch on every open.
             localStorage.setItem(STORAGE_KEY_CARDS_FETCHED_TOKENS, JSON.stringify(knownTokens));
           } catch (e) { }
-          console.debug('[AmexDash] Fetched ' + data.cardDetails.length + ' card details');
-          return data.cardDetails;
+          console.debug('[AmexDash] Fetched ' + result.cardDetails.length + ' card details');
+          return result.cardDetails;
         }
       } catch (e) {
         if (e instanceof SessionExpiredError) throw e;
@@ -595,7 +742,7 @@
           }
         }
       } catch (err) {
-        if (/access_denied|Provided tokens not authorized|IC_UE_POLICY_EXECUTION_FAILED/i.test(err.message)) {
+        if (isTokenAuthorizationError(err)) {
           console.warn('[AmexDash] Token not authorized for display number:', token.slice(0, 6), err.message);
           continue;
         }
@@ -636,7 +783,7 @@
       } catch (err) {
         if (onComplete) onComplete();
         if (err instanceof SessionExpiredError) {
-          if (/access_denied|Provided tokens not authorized|IC_UE_POLICY_EXECUTION_FAILED/i.test(err.message)) {
+          if (isTokenAuthorizationError(err)) {
             console.warn('[AmexDash] Token not authorized for trackers:', accountToken.slice(0, 6), err.message);
             return {
               accountToken,
@@ -1965,22 +2112,19 @@
       if (gen !== dashboardGeneration) return;
 
       if (err instanceof SessionExpiredError) {
-        // Clear stale cached data so next attempt uses fresh tokens
-        /*try {
-          localStorage.removeItem(STORAGE_KEY_CARDS);
-          localStorage.removeItem(STORAGE_KEY_TOKENS);
-          localStorage.removeItem(STORAGE_KEY_CARDS_FETCHED_TOKENS);
-        } catch(e) {}*/
-        interceptedCardDetails = [];
-        interceptedTokens = [];
+        clearAccountCache();
+        var freshTokens = extractTokensFromDOM();
+        if (freshTokens.length > 0) replaceTokens(freshTokens);
         dashboardActive = false;
 
         dashBody.innerHTML = '';
         const errEl = document.createElement('div');
         errEl.className = 'amex-dash-error';
-        errEl.innerHTML = '<h3>Session Changed</h3>' +
-          '<p>Your session context changed (account switch or expiration).</p>' +
-          '<p style="margin-top:8px;">Navigate to any <a href="/card-benefits/view-all/platinum" style="color:#006fcf">benefits page</a> to refresh card data, then try again.</p>' +
+        errEl.innerHTML = '<h3>Account Data Reset</h3>' +
+          '<p>The saved card session was rejected, so the dashboard cache was cleared.</p>' +
+          (freshTokens.length > 0
+            ? '<p style="margin-top:8px;">Fresh account data was found on this page. Retry now.</p>'
+            : '<p style="margin-top:8px;">Sign in again if needed, then open your account overview or any benefits page before retrying.</p>') +
           '<p style="margin-top:12px;"><button id="amex-dash-retry" style="background:#006fcf;color:#fff;border:none;padding:8px 20px;border-radius:4px;cursor:pointer;font-size:14px;">Retry Now</button></p>';
         dashBody.appendChild(errEl);
         document.getElementById('amex-dash-retry').addEventListener('click', function () {

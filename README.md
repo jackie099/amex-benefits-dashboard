@@ -25,15 +25,17 @@ A Tampermonkey userscript that adds a unified benefits credit tracker dashboard 
 ## Usage
 
 1. Log into your Amex account
-2. Visit any card's benefits page once (e.g., go to Rewards & Benefits for any card) to prime the data cache
+2. Open your account overview or any card's benefits page
 3. Click the **"All Benefits"** floating button (bottom-left corner)
-4. The dashboard loads with all your cards' credit trackers
+4. The dashboard discovers related cards and loads their credit trackers
 
-After the first visit, the card data is cached in localStorage and the dashboard works from any Amex page.
+Card data is cached in localStorage. If Amex changes the signed-in account context,
+the dashboard discards only its account cache, rediscovers the current cards, and
+preserves self-tracked benefit history.
 
 ## How It Works
 
-The script runs at `document-start` and monkey-patches `fetch` to intercept the page's own API calls to `functions.americanexpress.com`. This captures account tokens and card details as the page loads. When you click "All Benefits", it fans out tracker API calls for each card with concurrency control, aggregates the results by benefit type, and renders a full-screen dashboard overlay.
+The script runs at `document-start` and monkey-patches `fetch` to intercept the page's own API calls to `functions.americanexpress.com`. It merges account tokens from API traffic, page bootstrap data, and related loyalty accounts. When you click "All Benefits", it validates the current account context, fans out tracker API calls for each card with concurrency control, aggregates the results by benefit type, and renders a full-screen dashboard overlay.
 
 ### Key Design Decisions
 
